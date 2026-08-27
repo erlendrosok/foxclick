@@ -38,8 +38,11 @@ your desktop.
 
 ## Requirements
 
-- A Wayland session (developed on **KDE Plasma 6 / KWin**; the core should work
-  on any compositor, the global-shortcut helper is KDE-only).
+- A Wayland session. Developed and tested on **KDE Plasma 6 / KWin**. The tool
+  itself (`foxclick` + gamescope + xdotool) is compositor-agnostic and should
+  work anywhere Xwayland is available; only the **automatic global-shortcut
+  registration in `install.sh` is KDE-specific** — on other desktops you bind
+  the key yourself (see [Global shortcut](#global-shortcut)).
 - [`gamescope`](https://archlinux.org/packages/extra/x86_64/gamescope/)
 - [`xdotool`](https://archlinux.org/packages/extra/x86_64/xdotool/)
 - `bash`, `awk`, coreutils, and `setsid` (util-linux) — all standard.
@@ -66,11 +69,35 @@ cd foxclick
 | `config.example` | `~/.config/foxclick/config` (only if missing) |
 | generated `.desktop` | `~/.local/share/applications/foxclick.desktop` |
 
-and, on KDE, registers a global shortcut (**Meta+X** by default — override with
-`FOXCLICK_KEY="Meta+Shift+C" ./install.sh`).
+On KDE it also registers a global shortcut — see below. Everything except the
+`foxclick` script itself is optional convenience; you can also just drop the
+script anywhere on your `PATH` and run it directly.
 
-Or just drop the `foxclick` script anywhere on your `PATH` and run it directly;
-everything else is optional convenience.
+## Global shortcut
+
+You want `foxclick toggle` on a single key so you can arm/disarm it without
+leaving the game.
+
+**KDE Plasma** — `install.sh` does this for you: it writes
+`~/.config/kglobalshortcutsrc` and registers the binding live over D-Bus.
+Default is **Meta+X**; override with `FOXCLICK_KEY="Meta+Shift+C" ./install.sh`,
+or `FOXCLICK_KEY=none ./install.sh` to skip it. You can also change it afterwards
+in *System Settings → Keyboard → Shortcuts* (search "Foxclick").
+
+**Everything else** — `install.sh` skips this step; bind
+`~/.local/bin/foxclick toggle` to a key in your environment's own config:
+
+| environment | where |
+|---|---|
+| GNOME | Settings → Keyboard → *Custom Shortcuts*, command `foxclick toggle` |
+| Hyprland | `bind = SUPER, X, exec, foxclick toggle` |
+| Sway / i3 | `bindsym $mod+x exec foxclick toggle` |
+| niri | `Mod+X { spawn "foxclick" "toggle"; }` |
+| Xfce | Settings → Keyboard → *Application Shortcuts* |
+
+Pick a key your game doesn't use — `Meta`/`Super` combos are usually safe. If the
+compositor won't deliver the shortcut while a fullscreen game is focused, run
+`foxclick toggle` from a terminal on another monitor instead.
 
 ## Set up the game
 
@@ -125,8 +152,9 @@ foxclick status        # running state + last-run log
 foxclick log           # just the diagnostic log
 ```
 
-Typical flow: hover the cursor over the spot in-game, hit **Meta+X**, tab away to
-do something else, hit **Meta+X** again when the task is done.
+Typical flow: hover the cursor over the spot in-game, hit your toggle key
+(**Meta+X** by default on KDE — see [Global shortcut](#global-shortcut)), tab
+away to do something else, hit it again when the task is done.
 
 foxclick auto-stops if the game or its display disappears.
 
@@ -159,8 +187,9 @@ Changes take effect on the next `start`/`toggle` — there's no daemon.
   `foxclick calibrate`).
 - **"no gamescope display found"**: the game isn't running under gamescope, or
   it's a native Wayland client with no Xwayland. Check the Steam launch option.
-- **Meta+X does nothing over the game**: run `foxclick toggle` from a terminal on
-  your other monitor instead, or rebind (`FOXCLICK_KEY=... ./install.sh`).
+- **The toggle key does nothing over the game**: some compositors don't deliver
+  global shortcuts while a fullscreen game is focused. Run `foxclick toggle` from
+  a terminal on your other monitor instead, or rebind to a different key.
 - **Cursor snaps back and forth near in-game panels / menus**: gamescope is
   toggling between absolute and relative mouse mode as the game shows/hides its
   cursor. Add `--force-grab-cursor` to the launch options (see

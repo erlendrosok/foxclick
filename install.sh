@@ -49,8 +49,9 @@ if [ "$key" = none ] || [ "$key" = None ]; then
     exit 0
 fi
 if ! command -v kwriteconfig6 >/dev/null 2>&1; then
-    echo "kwriteconfig6 not found - not KDE, skipping global shortcut."
-    echo "Bind '$bin_dir/foxclick toggle' to a key yourself if you want one."
+    echo "not KDE Plasma - skipping automatic global shortcut."
+    echo "Bind '$bin_dir/foxclick toggle' to a key in your compositor/DE config."
+    echo "See the 'Global shortcut' section of the README for per-environment examples."
     exit 0
 fi
 
