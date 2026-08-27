@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# foxclick - focus-independent autoclicker for a gamescope-nested game (Foxhole).
+#
+# It sends input into gamescope's private X display, so building/digging keeps
+# going while your real keyboard and mouse are on another window/monitor.
+#
+# Requires: the game launched via  gamescope ... -- %command%   (Steam launch option)
+#           and  xdotool  installed.
+#
+# Usage:
+#   foxclick toggle      start if stopped, stop if running   (bind this to a hotkey)
+#   foxclick start | stop | status
+#   foxclick calibrate   show the detected display + fire 3 test clicks
+#   foxclick log         print the diagnostic log from the last run
+#
+# Config: ~/.config/foxclick/config  (shell syntax, sourced)
+
+set -uo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/foxclick/config"
+RUNDIR="${XDG_RUNTIME_DIR:-/tmp}"
+PIDFILE="$RUNDIR/foxclick.pid"
+LOG="$RUNDIR/foxclick.log"
+
+# ---- defaults (override in $CONFIG) ----
+MODE=hold          # hold = press and hold the button;  click = repeated clicks
+CPS=12             # clicks per second (click mode only)
+JITTER=15          # +/- percent random variation on the interval (click mode only)
+BUTTON=1           # X button: 1=left, 2=middle, 3=right
+WARP=""            # "X Y": re-position the nested cursor to this pixel; empty = wherever it is now
+GS_DISPLAY=""      # force the gamescope X display, e.g. ":1"; empty = autodetect
+MAX_SECONDS=0      # safety auto-stop after N seconds; 0 = no limit
+REASSERT=1         # hold mode: re-send mousedown every tick (survives gamescope dropping the grab)
+
+# shellcheck disable=SC1090
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+ts() { date '+%H:%M:%S'; }
+log() { printf '%s %s\n' "$(ts)" "$1" >>"$LOG"; }
+
+note() {
+    printf 'foxclick: %s\n' "$1" >&2
+    command -v notify-send >/dev/null 2>&1 && notify-send -a foxclick -t 2500 "foxclick" "$1" >/dev/null 2>&1 || true
+}
+die() { note "$1"; exit 1; }
+
+is_running() {
+    local p
+    [ -f "$PIDFILE" ] || return 1
+    p="$(cat "$PIDFILE" 2>/dev/null)" || return 1
+    [ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+# List every X display except the main one, newline-separated.
+other_displays() {
+    local main="${DISPLAY:-:0}" sock d
+    for sock in /tmp/.X11-unix/X*; do
+        [ -e "$sock" ] || continue
+        d=":${sock##*/X}"
+        [ "$d" = "$main" ] || echo "$d"
+    done
+}
+
+# Print the gamescope-nested X display (":N"), or fail.
+detect_display() {
+    if [ -n "$GS_DISPLAY" ]; then echo "$GS_DISPLAY"; return 0; fi
+    local d fallback=""
+    while read -r d; do
+        [ -n "$d" ] || continue
+        DISPLAY="$d" xdotool getdisplaygeometry >/dev/null 2>&1 || continue
+        if DISPLAY="$d" xdotool search --maxdepth 5 --name '.' >/dev/null 2>&1 \
+           || DISPLAY="$d" xdotool search --maxdepth 5 --class '.' >/dev/null 2>&1; then
+            echo "$d"; return 0
+        fi
+        fallback="$d"
+    done < <(other_displays)
+    [ -n "$fallback" ] && { echo "$fallback"; return 0; }
+    return 1
+}
+
+interval() {
+    awk -v c="$CPS" -v j="${JITTER:-0}" 'BEGIN{
+        srand();
+        b = (c > 0 ? 1.0/c : 0.08);
+        f = 1 + (rand()*2 - 1) * j/100.0;
+        v = b * f;
+        if (v < 0.005) v = 0.005;
+        printf "%.4f", v;
+    }'
+}
+
+# The background worker. Not called directly by the user.
+run() {
+    local d="$1" gamepid="${2:-}" start held=0 fails=0 tick=0
+    export DISPLAY="$d"
+    unset XAUTHORITY 2>/dev/null || true   # nested Xwayland: local connections need no cookie
+    start="$(date +%s)"
+    : >"$LOG"
+    log "worker start  display=$d gamepid=${gamepid:-none} mode=$MODE button=$BUTTON warp='${WARP:-none}' cps=$CPS"
+    echo "$$" >"$PIDFILE"
+
+    cleanup() {
+        local rc=$?
+        if [ "$held" = 1 ]; then
+            xdotool mouseup "$BUTTON" >>"$LOG" 2>&1
+            log "released button $BUTTON"
+        fi
+        rm -f "$PIDFILE"
+        log "worker exit (rc=$rc, ticks=$tick)"
+        note "stopped"
+        exit 0
+    }
+    trap cleanup INT TERM EXIT
+
+    log "probe: $(xdotool getdisplaygeometry 2>&1) | mouse $(xdotool getmouselocation 2>&1)"
+    log "windows: $(xdotool search --maxdepth 5 --name '.' getwindowname %@ 2>&1 | tr '\n' '|')"
+
+    if ! xdotool getdisplaygeometry >/dev/null 2>>"$LOG"; then
+        log "FATAL: cannot query display $d"
+        note "can't reach gamescope display $d (foxclick log)"
+        exit 1
+    fi
+
+    [ -n "$WARP" ] && { xdotool mousemove --sync $WARP >>"$LOG" 2>&1; log "warp -> $WARP"; }
+
+    if [ "$MODE" = hold ]; then
+        if xdotool mousedown "$BUTTON" >>"$LOG" 2>&1; then held=1; fi
+        log "mousedown button $BUTTON  (held=$held)"
+    fi
+
+    while :; do
+        tick=$((tick + 1))
+
+        if ! xdotool getdisplaygeometry >/dev/null 2>>"$LOG"; then
+            fails=$((fails + 1))
+            log "display unreachable ($fails/15) at tick $tick"
+            [ "$fails" -ge 15 ] && { log "giving up: display gone"; break; }
+            sleep 0.5; continue
+        fi
+        fails=0
+
+        if [ "${MAX_SECONDS:-0}" -gt 0 ] 2>/dev/null; then
+            [ "$(( $(date +%s) - start ))" -ge "$MAX_SECONDS" ] && { log "MAX_SECONDS reached"; break; }
+        fi
+
+        if [ "$MODE" = click ]; then
+            [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
+            xdotool click "$BUTTON" >>"$LOG" 2>&1 || log "click failed at tick $tick"
+            sleep "$(interval)"
+        else
+            [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
+            if [ "${REASSERT:-1}" = 1 ] && [ "$held" = 1 ]; then
+                xdotool mousedown "$BUTTON" >>"$LOG" 2>&1 || log "re-assert mousedown failed at tick $tick"
+            fi
+            sleep 1
+        fi
+    done
+    cleanup
+}
+
+start() {
+    is_running && { note "already running"; return 0; }
+    command -v xdotool >/dev/null 2>&1 || die "xdotool not installed  ->  sudo pacman -S xdotool"
+    pgrep -x gamescope >/dev/null 2>&1 || note "warning: no gamescope process found"
+    local d gamepid
+    d="$(detect_display)" || die "no gamescope display found - is the game running under gamescope?"
+    gamepid="$(pgrep -x gamescope | head -n1 || true)"
+    setsid -f "$SELF" __run "$d" "${gamepid:-}" </dev/null >/dev/null 2>&1
+    sleep 0.4
+    if is_running; then
+        note "ON - $MODE on display $d${WARP:+ @ $WARP}"
+    else
+        note "failed to start - run: foxclick log"
+        exit 1
+    fi
+}
+
+stop() {
+    local d p
+    if is_running; then
+        p="$(cat "$PIDFILE")"
+        kill "$p" 2>/dev/null
+        for _ in $(seq 30); do is_running || break; sleep 0.1; done
+        is_running && kill -9 "$p" 2>/dev/null
+    else
+        note "not running"
+    fi
+    rm -f "$PIDFILE"
+    # belt & suspenders: make sure no button is stuck down on the nested display
+    d="$(detect_display 2>/dev/null || true)"
+    [ -n "$d" ] && DISPLAY="$d" xdotool mouseup 1 mouseup 3 >/dev/null 2>&1 || true
+}
+
+status() {
+    if is_running; then
+        echo "running (pid $(cat "$PIDFILE"), mode=$MODE, cps=$CPS, button=$BUTTON)"
+    else
+        echo "stopped"
+    fi
+    [ -f "$LOG" ] && { echo "--- last run log ---"; cat "$LOG"; }
+}
+
+calibrate() {
+    command -v xdotool >/dev/null 2>&1 || die "xdotool not installed  ->  sudo pacman -S xdotool"
+    echo "main display        : ${DISPLAY:-:0}"
+    echo "other X displays    : $(other_displays | tr '\n' ' ')"
+    local d
+    while read -r d; do
+        [ -n "$d" ] || continue
+        echo
+        echo "display $d"
+        echo "  geometry : $(DISPLAY="$d" xdotool getdisplaygeometry 2>&1)"
+        echo "  pointer  : $(DISPLAY="$d" xdotool getmouselocation 2>&1)"
+        echo "  windows  : $(DISPLAY="$d" xdotool search --maxdepth 5 --name '.' getwindowname %@ 2>&1 | tr '\n' '|')"
+    done < <(other_displays)
+    echo
+    d="$(detect_display)" || die "no gamescope display found - is the game running under gamescope?"
+    echo "==> chosen display : $d"
+    echo "firing 5 test clicks at the current nested pointer position in 2s..."
+    sleep 2
+    for _ in 1 2 3 4 5; do DISPLAY="$d" xdotool click "$BUTTON"; sleep 0.4; done
+    echo "done - did the game register all 5?"
+}
+
+case "${1:-toggle}" in
+    toggle)     is_running && stop || start ;;
+    start)      start ;;
+    stop)       stop ;;
+    status)     status ;;
+    calibrate)  calibrate ;;
+    log)        [ -f "$LOG" ] && cat "$LOG" || echo "no log yet ($LOG)" ;;
+    __run)      shift; run "${1:-}" "${2:-}" ;;
+    -h|--help|help)
+        sed -n '2,18p' "$SELF" | sed 's/^# \{0,1\}//' ;;
+    *)
+        echo "usage: foxclick [toggle|start|stop|status|calibrate|log]" >&2
+        exit 2 ;;
+esac

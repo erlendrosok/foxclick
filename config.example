@@ -1,0 +1,29 @@
+# foxclick configuration - shell syntax, sourced by ~/.local/bin/foxclick
+# Edit, then just toggle again (no daemon to restart).
+
+# click = repeated click events  (this is what xclicker did - a good default)
+# hold  = press and hold the button down
+MODE=click
+
+# click mode:
+CPS=12            # clicks per second
+JITTER=15         # +/- percent random variation on the interval (0 = perfectly steady)
+
+BUTTON=1          # 1=left  2=middle  3=right
+
+# hold mode only: re-send the press every second so gamescope doesn't drop the
+# held-button state. Set 0 for a single clean press.
+REASSERT=1
+
+# Cursor handling:
+#   empty  -> act wherever the nested cursor is when you hit the hotkey
+#             (hover the spot in-game, then trigger, then tab away)
+#   "X Y"  -> re-position the nested cursor to this pixel every tick, e.g. WARP="1280 720"
+#             use `foxclick calibrate` to read out coordinates
+WARP=""
+
+# Force the gamescope X display instead of autodetecting, e.g. GS_DISPLAY=":1"
+GS_DISPLAY=""
+
+# Safety: auto-stop after this many seconds (0 = run until you stop it or the game closes)
+MAX_SECONDS=0
