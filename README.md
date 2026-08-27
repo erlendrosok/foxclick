@@ -14,9 +14,9 @@ matter where your real keyboard and mouse focus is. Park the game on one monitor
 work on the other.
 
 It was written for repetitive hold-to-work actions in
-[Foxhole](https://store.steampowered.com/app/505460/Foxhole/) (building, digging,
-refining), but nothing in it is Foxhole-specific — it works with any game you
-launch through gamescope.
+[Foxhole](https://store.steampowered.com/app/505460/Foxhole/) (building, digging),
+but nothing in it is Foxhole-specific — it works with any game you launch through
+gamescope.
 
 ## How it works
 
