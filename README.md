@@ -78,11 +78,21 @@ Add a launch option so Steam runs the game through gamescope. In Steam →
 game → *Properties* → *Launch Options*:
 
 ```
-gamescope -W 2560 -H 1440 -f -- %command%
+gamescope -w 2560 -h 1440 -W 2560 -H 1440 -f --force-windows-fullscreen -- %command%
 ```
 
-Adjust `-W`/`-H` to your monitor. Useful extras: `-r 240` (refresh rate),
-`--force-grab-cursor` (if the mouse escapes the window), `-e` (Steam integration).
+Adjust the numbers to your monitor. Lowercase `-w`/`-h` is the resolution
+gamescope asks the game to render at; uppercase `-W`/`-H` is the output size.
+**Keep them equal to each other and to the resolution you set inside the game** —
+a mismatch is the usual cause of the cursor snapping back near the screen edges
+or over in-game panels. `--force-windows-fullscreen` makes the game window fill
+the nested display so the cursor bounds line up with what you see.
+
+Other useful flags: `-r 240` (refresh rate), `-e` (Steam integration),
+`--backend sdl` (fallback if cursor handling still misbehaves).
+
+Then, **in the game's own video settings**, pick Fullscreen (or Borderless) at
+that same resolution.
 
 ## Usage
 
@@ -113,6 +123,7 @@ foxclick auto-stops if the game or its display disappears.
 | `JITTER` | `15` | ± percent random variation on the interval; `0` = perfectly steady |
 | `BUTTON` | `1` | X button number — `1` left, `2` middle, `3` right |
 | `REASSERT` | `1` | hold mode: re-send the press every second so gamescope doesn't drop the held state |
+| `CLEARMODS` | `1` | click with `--clearmodifiers` so a held Alt/Ctrl/Shift (e.g. Discord push-to-talk leaking into the game) doesn't turn every click into a modified click |
 | `WARP` | *(empty)* | `"X Y"` to move the nested cursor to a fixed pixel every tick; empty = wherever it is |
 | `GS_DISPLAY` | *(empty)* | force the nested display, e.g. `":1"`, instead of autodetecting |
 | `MAX_SECONDS` | `0` | safety auto-stop after N seconds; `0` = no limit |
@@ -132,6 +143,15 @@ Changes take effect on the next `start`/`toggle` — there's no daemon.
   it's a native Wayland client with no Xwayland. Check the Steam launch option.
 - **Meta+X does nothing over the game**: run `foxclick toggle` from a terminal on
   your other monitor instead, or rebind (`FOXCLICK_KEY=... ./install.sh`).
+- **Cursor snaps back near screen edges / in-game menus, or won't cross to another
+  monitor**: gamescope's cursor bounds don't match the visible image. Make the
+  in-game resolution equal to `-w`/`-h`/`-W`/`-H`, add `--force-windows-fullscreen`,
+  and set the game to Fullscreen/Borderless. To move the real cursor out of a
+  focused gamescope window, unfocus it (Meta, or your compositor's shortcut) —
+  foxclick keeps clicking the nested display regardless of focus.
+- **Clicks stop working while you hold a key** (Discord push-to-talk on Alt,
+  etc.): that modifier is reaching the game and modifying every click. `CLEARMODS=1`
+  (the default) neutralises it; make sure it's not set to `0`.
 
 ## Caveats
 

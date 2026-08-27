@@ -32,6 +32,8 @@ WARP=""            # "X Y": re-position the nested cursor to this pixel; empty =
 GS_DISPLAY=""      # force the gamescope X display, e.g. ":1"; empty = autodetect
 MAX_SECONDS=0      # safety auto-stop after N seconds; 0 = no limit
 REASSERT=1         # hold mode: re-send mousedown every tick (survives gamescope dropping the grab)
+CLEARMODS=1        # send clicks with --clearmodifiers so a held Alt/Ctrl/Shift (e.g. Discord
+                   # push-to-talk leaking into the game) doesn't turn every click into Alt+click
 
 # shellcheck disable=SC1090
 [ -f "$CONFIG" ] && . "$CONFIG"
@@ -95,6 +97,7 @@ run() {
     local d="$1" gamepid="${2:-}" start held=0 fails=0 tick=0
     export DISPLAY="$d"
     unset XAUTHORITY 2>/dev/null || true   # nested Xwayland: local connections need no cookie
+    local clk=(); [ "${CLEARMODS:-1}" = 1 ] && clk=(--clearmodifiers)
     start="$(date +%s)"
     : >"$LOG"
     log "worker start  display=$d gamepid=${gamepid:-none} mode=$MODE button=$BUTTON warp='${WARP:-none}' cps=$CPS"
@@ -103,7 +106,7 @@ run() {
     cleanup() {
         local rc=$?
         if [ "$held" = 1 ]; then
-            xdotool mouseup "$BUTTON" >>"$LOG" 2>&1
+            xdotool mouseup "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1
             log "released button $BUTTON"
         fi
         rm -f "$PIDFILE"
@@ -125,7 +128,7 @@ run() {
     [ -n "$WARP" ] && { xdotool mousemove --sync $WARP >>"$LOG" 2>&1; log "warp -> $WARP"; }
 
     if [ "$MODE" = hold ]; then
-        if xdotool mousedown "$BUTTON" >>"$LOG" 2>&1; then held=1; fi
+        if xdotool mousedown "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1; then held=1; fi
         log "mousedown button $BUTTON  (held=$held)"
     fi
 
@@ -146,12 +149,12 @@ run() {
 
         if [ "$MODE" = click ]; then
             [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
-            xdotool click "$BUTTON" >>"$LOG" 2>&1 || log "click failed at tick $tick"
+            xdotool click "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1 || log "click failed at tick $tick"
             sleep "$(interval)"
         else
             [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
             if [ "${REASSERT:-1}" = 1 ] && [ "$held" = 1 ]; then
-                xdotool mousedown "$BUTTON" >>"$LOG" 2>&1 || log "re-assert mousedown failed at tick $tick"
+                xdotool mousedown "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1 || log "re-assert mousedown failed at tick $tick"
             fi
             sleep 1
         fi

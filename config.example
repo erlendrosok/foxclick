@@ -15,6 +15,11 @@ BUTTON=1          # 1=left  2=middle  3=right
 # held-button state. Set 0 for a single clean press.
 REASSERT=1
 
+# Send clicks with --clearmodifiers. If a held modifier key leaks into the game
+# (e.g. Alt used for Discord push-to-talk while the game is focused) every click
+# would otherwise become Alt+click and do nothing. Set 0 to disable.
+CLEARMODS=1
+
 # Cursor handling:
 #   empty  -> act wherever the nested cursor is when you hit the hotkey
 #             (hover the spot in-game, then trigger, then tab away)
