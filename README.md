@@ -4,8 +4,9 @@ A focus-independent autoclicker for games run inside [gamescope](https://github.
 
 Ordinary Linux autoclickers (xclicker, xdotool loops, ydotool) inject input at a
 global level: they click into *whatever* window is focused. On Wayland you can't
-tell them "only click that background window", so the moment you tab away to a
-browser or Discord, the clicks follow you and wreck whatever you're doing.
+tell them "only click that background window", so as soon as you switch to any
+other window the clicks land there instead — you can't touch anything else on
+the machine while the autoclicker runs.
 
 `foxclick` gets around this by aiming at the **private X display that gamescope
 creates for the game**. Clicks go into that nested display and keep going no
@@ -116,28 +117,17 @@ Other useful flags: `-r 240` (refresh rate), `-e` (Steam integration),
 `--backend sdl` (fallback if cursor handling misbehaves), `-s 1.0` (mouse
 sensitivity multiplier, tune if aiming feels off with `--force-grab-cursor`).
 
-### Why `--force-grab-cursor`
+### The `--force-grab-cursor` flag
 
-By default gamescope switches between two mouse modes on the fly: **absolute**
-(a normal desktop pointer) when the game's cursor is visible, and **relative**
-(pointer grabbed, only deltas sent) when it's hidden — the mode a first-person
-game wants.
+Without it, some games (Foxhole among them) make the mouse pointer jitter and
+snap back and forth when it's near an in-game menu or panel, which makes those
+hard to click. `--force-grab-cursor` stops that.
 
-Some games — Foxhole, and anything that warps the pointer for screen-edge camera
-panning — keep toggling their cursor between shown and hidden as you move around
-the screen. gamescope follows every toggle, grabbing and releasing the pointer
-several times a second. Near a UI panel (chat, inventory, a menu) you sit right
-on that boundary and the pointer visibly **snaps back and forth**, sometimes
-several pixels, making those panels hard to click.
+The trade-off: the pointer is then locked inside the gamescope window, even in
+menus. Press **Meta** (or your compositor's unfocus shortcut) to release it when
+you want another monitor — foxclick keeps clicking the whole time, focused or not.
 
-`--force-grab-cursor` pins gamescope to relative mode permanently. No more
-toggling, no more snapping. The cost: the pointer is always confined to the
-gamescope window, even in menus. Press **Meta** (or your compositor's
-unfocus/overview shortcut) to release it when you want another monitor —
-foxclick keeps clicking the nested display the entire time, focused or not.
-
-If your game does **not** show this snapping without gamescope, you probably
-don't need this flag; start without it and add it only if the pointer misbehaves.
+If you don't see the pointer misbehaving, leave the flag out.
 
 ## Usage
 
@@ -194,10 +184,9 @@ lowest-numbered nested display; set `GS_DISPLAY` (check the numbers with
 - **The toggle key does nothing over the game**: some compositors don't deliver
   global shortcuts while a fullscreen game is focused. Run `foxclick toggle` from
   a terminal on your other monitor instead, or rebind to a different key.
-- **Cursor snaps back and forth near in-game panels / menus**: gamescope is
-  toggling between absolute and relative mouse mode as the game shows/hides its
-  cursor. Add `--force-grab-cursor` to the launch options (see
-  [Why `--force-grab-cursor`](#why---force-grab-cursor)).
+- **Cursor snaps back and forth near in-game panels / menus**: add
+  `--force-grab-cursor` to the launch options (see
+  [The `--force-grab-cursor` flag](#the---force-grab-cursor-flag)).
 - **Cursor won't cross to another monitor while in-game**: expected with
   `--force-grab-cursor`, and some games confine it on their own too. Press
   **Meta** to unfocus the gamescope window; the cursor frees and foxclick keeps
