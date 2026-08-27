@@ -78,21 +78,39 @@ Add a launch option so Steam runs the game through gamescope. In Steam →
 game → *Properties* → *Launch Options*:
 
 ```
-gamescope -w 2560 -h 1440 -W 2560 -H 1440 -f --force-windows-fullscreen -- %command%
+gamescope -w 2560 -h 1440 -W 2560 -H 1440 -f --force-grab-cursor -- %command%
 ```
 
 Adjust the numbers to your monitor. Lowercase `-w`/`-h` is the resolution
-gamescope asks the game to render at; uppercase `-W`/`-H` is the output size.
-**Keep them equal to each other and to the resolution you set inside the game** —
-a mismatch is the usual cause of the cursor snapping back near the screen edges
-or over in-game panels. `--force-windows-fullscreen` makes the game window fill
-the nested display so the cursor bounds line up with what you see.
+gamescope asks the game to render at; uppercase `-W`/`-H` is the output size —
+keep them equal to each other and to the resolution you set inside the game.
 
 Other useful flags: `-r 240` (refresh rate), `-e` (Steam integration),
-`--backend sdl` (fallback if cursor handling still misbehaves).
+`--backend sdl` (fallback if cursor handling misbehaves), `-s 1.0` (mouse
+sensitivity multiplier, tune if aiming feels off with `--force-grab-cursor`).
 
-Then, **in the game's own video settings**, pick Fullscreen (or Borderless) at
-that same resolution.
+### Why `--force-grab-cursor`
+
+By default gamescope switches between two mouse modes on the fly: **absolute**
+(a normal desktop pointer) when the game's cursor is visible, and **relative**
+(pointer grabbed, only deltas sent) when it's hidden — the mode a first-person
+game wants.
+
+Some games — Foxhole, and anything that warps the pointer for screen-edge camera
+panning — keep toggling their cursor between shown and hidden as you move around
+the screen. gamescope follows every toggle, grabbing and releasing the pointer
+several times a second. Near a UI panel (chat, inventory, a menu) you sit right
+on that boundary and the pointer visibly **snaps back and forth**, sometimes
+several pixels, making those panels hard to click.
+
+`--force-grab-cursor` pins gamescope to relative mode permanently. No more
+toggling, no more snapping. The cost: the pointer is always confined to the
+gamescope window, even in menus. Press **Meta** (or your compositor's
+unfocus/overview shortcut) to release it when you want another monitor —
+foxclick keeps clicking the nested display the entire time, focused or not.
+
+If your game does **not** show this snapping without gamescope, you probably
+don't need this flag; start without it and add it only if the pointer misbehaves.
 
 ## Usage
 
@@ -143,12 +161,14 @@ Changes take effect on the next `start`/`toggle` — there's no daemon.
   it's a native Wayland client with no Xwayland. Check the Steam launch option.
 - **Meta+X does nothing over the game**: run `foxclick toggle` from a terminal on
   your other monitor instead, or rebind (`FOXCLICK_KEY=... ./install.sh`).
-- **Cursor snaps back near screen edges / in-game menus, or won't cross to another
-  monitor**: gamescope's cursor bounds don't match the visible image. Make the
-  in-game resolution equal to `-w`/`-h`/`-W`/`-H`, add `--force-windows-fullscreen`,
-  and set the game to Fullscreen/Borderless. To move the real cursor out of a
-  focused gamescope window, unfocus it (Meta, or your compositor's shortcut) —
-  foxclick keeps clicking the nested display regardless of focus.
+- **Cursor snaps back and forth near in-game panels / menus**: gamescope is
+  toggling between absolute and relative mouse mode as the game shows/hides its
+  cursor. Add `--force-grab-cursor` to the launch options (see
+  [Why `--force-grab-cursor`](#why---force-grab-cursor)).
+- **Cursor won't cross to another monitor while in-game**: expected with
+  `--force-grab-cursor`, and some games confine it on their own too. Press
+  **Meta** to unfocus the gamescope window; the cursor frees and foxclick keeps
+  clicking the nested display regardless of focus.
 - **Clicks stop working while you hold a key** (Discord push-to-talk on Alt,
   etc.): that modifier is reaching the game and modifying every click. `CLEARMODS=1`
   (the default) neutralises it; make sure it's not set to `0`.
