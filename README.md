@@ -176,6 +176,10 @@ foxclick auto-stops if the game or its display disappears.
 
 Changes take effect on the next `start`/`toggle` — there's no daemon.
 
+If you run more than one game under gamescope at once, foxclick targets the
+lowest-numbered nested display; set `GS_DISPLAY` (check the numbers with
+`foxclick calibrate`) to point it at the other one.
+
 ## Troubleshooting
 
 - **`foxclick log`** prints what the last run did, including raw `xdotool` errors.
