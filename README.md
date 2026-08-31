@@ -159,7 +159,7 @@ foxclick auto-stops if the game or its display disappears.
 | `JITTER` | `15` | ± percent random variation on the interval; `0` = perfectly steady |
 | `BUTTON` | `1` | X button number — `1` left, `2` middle, `3` right |
 | `REASSERT` | `1` | hold mode: re-send the press every second so gamescope doesn't drop the held state |
-| `CLEARMODS` | `1` | click with `--clearmodifiers` so a held Alt/Ctrl/Shift (e.g. Discord push-to-talk leaking into the game) doesn't turn every click into a modified click |
+| `CLEARMODS` | `1` | release a held keyboard modifier (Alt/Ctrl/Shift/Super) before each click, so a modifier leaking into the game (e.g. Discord push-to-talk on Alt) doesn't turn every click into a modified click. Keyboard only — never touches mouse buttons |
 | `WARP` | *(empty)* | `"X Y"` to move the nested cursor to a fixed pixel every tick; empty = wherever it is |
 | `GS_DISPLAY` | *(empty)* | force the nested display, e.g. `":1"`, instead of autodetecting |
 | `MAX_SECONDS` | `0` | safety auto-stop after N seconds; `0` = no limit |
@@ -194,6 +194,12 @@ lowest-numbered nested display; set `GS_DISPLAY` (check the numbers with
 - **Clicks stop working while you hold a key** (Discord push-to-talk on Alt,
   etc.): that modifier is reaching the game and modifying every click. `CLEARMODS=1`
   (the default) neutralises it; make sure it's not set to `0`.
+- **Right-click (or another button) dies in-game after using foxclick**: a click
+  the tool sent was interrupted mid-press and left a phantom button held on the
+  nested display. `foxclick stop` releases buttons 1/2/3 there and each `start`
+  begins from a clean slate, so toggling clears it. (Older versions used
+  `xdotool --clearmodifiers`, which releases-and-restores held mouse buttons and
+  could strand the button you were physically holding — fixed.)
 
 ## Caveats
 

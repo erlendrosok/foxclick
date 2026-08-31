@@ -32,8 +32,9 @@ WARP=""            # "X Y": re-position the nested cursor to this pixel; empty =
 GS_DISPLAY=""      # force the gamescope X display, e.g. ":1"; empty = autodetect
 MAX_SECONDS=0      # safety auto-stop after N seconds; 0 = no limit
 REASSERT=1         # hold mode: re-send mousedown every tick (survives gamescope dropping the grab)
-CLEARMODS=1        # send clicks with --clearmodifiers so a held Alt/Ctrl/Shift (e.g. Discord
-                   # push-to-talk leaking into the game) doesn't turn every click into Alt+click
+CLEARMODS=1        # release a held keyboard modifier (Alt/Ctrl/Shift/Super) before each
+                   # click, so a modifier leaking into the game (e.g. Discord push-to-talk
+                   # on Alt) doesn't turn every click into a modified click
 
 # shellcheck disable=SC1090
 [ -f "$CONFIG" ] && . "$CONFIG"
@@ -97,18 +98,29 @@ run() {
     local d="$1" gamepid="${2:-}" start held=0 fails=0 tick=0
     export DISPLAY="$d"
     unset XAUTHORITY 2>/dev/null || true   # nested Xwayland: local connections need no cookie
-    local clk=(); [ "${CLEARMODS:-1}" = 1 ] && clk=(--clearmodifiers)
     start="$(date +%s)"
     : >"$LOG"
     log "worker start  display=$d gamepid=${gamepid:-none} mode=$MODE button=$BUTTON warp='${WARP:-none}' cps=$CPS"
     echo "$$" >"$PIDFILE"
 
+    # Release every mouse button on the nested display, always. Covers a click
+    # interrupted mid-press and any button left down by a previous run.
+    release_buttons() { local b; for b in 1 2 3; do xdotool mouseup "$b" >>"$LOG" 2>&1 || true; done; }
+
+    # CLEARMODS: drop a leaked *keyboard* modifier (e.g. Alt held for Discord
+    # push-to-talk while the game is focused) so it doesn't modify the click.
+    # Done with explicit keyup rather than xdotool's --clearmodifiers, which also
+    # releases-and-restores held mouse buttons and can strand the user's
+    # right-click when they let go mid-cycle.
+    clear_kbd_mods() {
+        [ "${CLEARMODS:-1}" = 1 ] || return 0
+        xdotool keyup Alt_L Alt_R Control_L Control_R Shift_L Shift_R Super_L Super_R >>"$LOG" 2>&1 || true
+    }
+
     cleanup() {
         local rc=$?
-        if [ "$held" = 1 ]; then
-            xdotool mouseup "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1
-            log "released button $BUTTON"
-        fi
+        release_buttons
+        log "released mouse buttons"
         rm -f "$PIDFILE"
         log "worker exit (rc=$rc, ticks=$tick)"
         note "stopped"
@@ -125,10 +137,13 @@ run() {
         exit 1
     fi
 
+    release_buttons   # start from a clean slate
+
     [ -n "$WARP" ] && { xdotool mousemove --sync $WARP >>"$LOG" 2>&1; log "warp -> $WARP"; }
 
     if [ "$MODE" = hold ]; then
-        if xdotool mousedown "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1; then held=1; fi
+        clear_kbd_mods
+        if xdotool mousedown "$BUTTON" >>"$LOG" 2>&1; then held=1; fi
         log "mousedown button $BUTTON  (held=$held)"
     fi
 
@@ -149,12 +164,13 @@ run() {
 
         if [ "$MODE" = click ]; then
             [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
-            xdotool click "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1 || log "click failed at tick $tick"
+            clear_kbd_mods
+            xdotool click "$BUTTON" >>"$LOG" 2>&1 || log "click failed at tick $tick"
             sleep "$(interval)"
         else
             [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
             if [ "${REASSERT:-1}" = 1 ] && [ "$held" = 1 ]; then
-                xdotool mousedown "${clk[@]}" "$BUTTON" >>"$LOG" 2>&1 || log "re-assert mousedown failed at tick $tick"
+                xdotool mousedown "$BUTTON" >>"$LOG" 2>&1 || log "re-assert mousedown failed at tick $tick"
             fi
             sleep 1
         fi
@@ -190,9 +206,13 @@ stop() {
         note "not running"
     fi
     rm -f "$PIDFILE"
-    # belt & suspenders: make sure no button is stuck down on the nested display
+    # belt & suspenders: release every button on the nested display in case a
+    # click was interrupted mid-press (fixes the game losing right-click).
     d="$(detect_display 2>/dev/null || true)"
-    [ -n "$d" ] && DISPLAY="$d" xdotool mouseup 1 mouseup 3 >/dev/null 2>&1 || true
+    if [ -n "$d" ]; then
+        local b
+        for b in 1 2 3; do DISPLAY="$d" xdotool mouseup "$b" >/dev/null 2>&1 || true; done
+    fi
 }
 
 status() {
