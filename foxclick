@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# foxclick - focus-independent autoclicker for a gamescope-nested game (Foxhole).
+# foxclick - focus-independent autoclicker for an XWayland game (Foxhole).
 #
-# It sends input into gamescope's private X display, so building/digging keeps
-# going while your real keyboard and mouse are on another window/monitor.
+# Sends synthetic button events straight to the game's X window with
+#   xdotool click --window <id>
+# so building/digging keeps going while your real keyboard and mouse are on
+# another window or monitor. The events go to that one window by id, not to
+# whatever is focused, so they don't follow your focus and don't steal it.
 #
-# Requires: the game launched via  gamescope ... -- %command%   (Steam launch option)
-#           and  xdotool  installed.
+# No gamescope, no nested display - the game runs as an ordinary (XWayland)
+# window on your Wayland compositor.
+#
+# Requires: xdotool, and the game running as a normal window (NOT via gamescope).
 #
 # Usage:
 #   foxclick toggle      start if stopped, stop if running   (bind this to a hotkey)
 #   foxclick start | stop | status
-#   foxclick calibrate   show the detected display + fire 3 test clicks
+#   foxclick calibrate   show the detected game window + fire 5 test clicks
 #   foxclick log         print the diagnostic log from the last run
 #
 # Config: ~/.config/foxclick/config  (shell syntax, sourced)
@@ -24,17 +29,19 @@ PIDFILE="$RUNDIR/foxclick.pid"
 LOG="$RUNDIR/foxclick.log"
 
 # ---- defaults (override in $CONFIG) ----
-MODE=hold          # hold = press and hold the button;  click = repeated clicks
-CPS=12             # clicks per second (click mode only)
-JITTER=15          # +/- percent random variation on the interval (click mode only)
-BUTTON=1           # X button: 1=left, 2=middle, 3=right
-WARP=""            # "X Y": re-position the nested cursor to this pixel; empty = wherever it is now
-GS_DISPLAY=""      # force the gamescope X display, e.g. ":1"; empty = autodetect
-MAX_SECONDS=0      # safety auto-stop after N seconds; 0 = no limit
-REASSERT=1         # hold mode: re-send mousedown every tick (survives gamescope dropping the grab)
-CLEARMODS=1        # release a held keyboard modifier (Alt/Ctrl/Shift/Super) before each
-                   # click, so a modifier leaking into the game (e.g. Discord push-to-talk
-                   # on Alt) doesn't turn every click into a modified click
+MODE=hold                     # hold = press and hold the button;  click = repeated clicks
+CPS=12                        # clicks per second (click mode only)
+JITTER=15                     # +/- percent random variation on the interval (click mode only)
+BUTTON=1                      # X button: 1=left, 2=middle, 3=right
+WINDOW_CLASS="steam_app_505460"  # X window class of the game (Foxhole's Steam appid class)
+WINDOW_NAME=""                # optional: also require the window name to match this regex
+X_DISPLAY=""                  # force the X display, e.g. ":0"; empty = autodetect
+MAX_SECONDS=0                 # safety auto-stop after N seconds; 0 = no limit
+REASSERT=1                    # hold mode: re-send the press every tick so a dropped press recovers
+CLEARMODS=0                   # send a keyboard-modifier release to the game window before each
+                             # click. Only enable if a modifier you hold on the keyboard
+                             # (Alt for push-to-talk, etc.) is turning clicks into modified
+                             # clicks in-game. Targets the game window only.
 
 # shellcheck disable=SC1090
 [ -f "$CONFIG" ] && . "$CONFIG"
@@ -55,30 +62,49 @@ is_running() {
     [ -n "$p" ] && kill -0 "$p" 2>/dev/null
 }
 
-# List every X display except the main one, newline-separated.
-other_displays() {
-    local main="${DISPLAY:-:0}" sock d
+# Candidate X displays: the configured/inherited one first, then every socket.
+candidate_displays() {
+    local seen=" " d
+    for d in "$X_DISPLAY" "${DISPLAY:-}" ; do
+        [ -n "$d" ] || continue
+        case "$seen" in *" $d "*) ;; *) echo "$d"; seen="$seen$d " ;; esac
+    done
+    local sock
     for sock in /tmp/.X11-unix/X*; do
         [ -e "$sock" ] || continue
         d=":${sock##*/X}"
-        [ "$d" = "$main" ] || echo "$d"
+        d="${d%_}"        # ignore abstract-socket ".../X0_" style names
+        case "$seen" in *" $d "*) ;; *) echo "$d"; seen="$seen$d " ;; esac
     done
 }
 
-# Print the gamescope-nested X display (":N"), or fail.
-detect_display() {
-    if [ -n "$GS_DISPLAY" ]; then echo "$GS_DISPLAY"; return 0; fi
-    local d fallback=""
-    while read -r d; do
-        [ -n "$d" ] || continue
-        DISPLAY="$d" xdotool getdisplaygeometry >/dev/null 2>&1 || continue
-        if DISPLAY="$d" xdotool search --maxdepth 5 --name '.' >/dev/null 2>&1 \
-           || DISPLAY="$d" xdotool search --maxdepth 5 --class '.' >/dev/null 2>&1; then
-            echo "$d"; return 0
+# Echo the largest-area window of $WINDOW_CLASS (optionally name-filtered) on
+# display $1, or nothing. The game's real window dwarfs its 1x1 / IME / tooltip
+# helper windows, so "biggest wins" is a reliable pick.
+find_window_on() {
+    local disp="$1" w best="" bestA=0 a nm
+    for w in $(DISPLAY="$disp" xdotool search --class "$WINDOW_CLASS" 2>/dev/null); do
+        if [ -n "$WINDOW_NAME" ]; then
+            nm="$(DISPLAY="$disp" xdotool getwindowname "$w" 2>/dev/null || true)"
+            printf '%s' "$nm" | grep -Eq "$WINDOW_NAME" || continue
         fi
-        fallback="$d"
-    done < <(other_displays)
-    [ -n "$fallback" ] && { echo "$fallback"; return 0; }
+        unset WIDTH HEIGHT
+        eval "$(DISPLAY="$disp" xdotool getwindowgeometry --shell "$w" 2>/dev/null || true)"
+        a=$(( ${WIDTH:-0} * ${HEIGHT:-0} ))
+        [ "$a" -gt "$bestA" ] && { bestA="$a"; best="$w"; }
+    done
+    [ -n "$best" ] && echo "$best"
+}
+
+# Print "DISPLAY WID" for the game window, searching every candidate display.
+find_game() {
+    local disp w
+    while read -r disp; do
+        [ -n "$disp" ] || continue
+        DISPLAY="$disp" xdotool getdisplaygeometry >/dev/null 2>&1 || continue
+        w="$(find_window_on "$disp")" || true
+        [ -n "$w" ] && { echo "$disp $w"; return 0; }
+    done < <(candidate_displays)
     return 1
 }
 
@@ -95,32 +121,68 @@ interval() {
 
 # The background worker. Not called directly by the user.
 run() {
-    local d="$1" gamepid="${2:-}" start held=0 fails=0 tick=0
-    export DISPLAY="$d"
-    unset XAUTHORITY 2>/dev/null || true   # nested Xwayland: local connections need no cookie
+    local disp="$1" wid="$2" start held=0 fails=0 tick=0
+    export DISPLAY="$disp"
+    unset XAUTHORITY 2>/dev/null || true   # local Xwayland connection needs no cookie
     start="$(date +%s)"
     : >"$LOG"
-    log "worker start  display=$d gamepid=${gamepid:-none} mode=$MODE button=$BUTTON warp='${WARP:-none}' cps=$CPS"
+    log "worker start  display=$disp wid=$wid mode=$MODE button=$BUTTON cps=$CPS class=$WINDOW_CLASS"
     echo "$$" >"$PIDFILE"
 
-    # Release every mouse button on the nested display, always. Covers a click
-    # interrupted mid-press and any button left down by a previous run.
-    release_buttons() { local b; for b in 1 2 3; do xdotool mouseup "$b" >>"$LOG" 2>&1 || true; done; }
-
-    # CLEARMODS: drop a leaked *keyboard* modifier (e.g. Alt held for Discord
-    # push-to-talk while the game is focused) so it doesn't modify the click.
-    # Done with explicit keyup rather than xdotool's --clearmodifiers, which also
-    # releases-and-restores held mouse buttons and can strand the user's
-    # right-click when they let go mid-cycle.
-    clear_kbd_mods() {
-        [ "${CLEARMODS:-1}" = 1 ] || return 0
-        xdotool keyup Alt_L Alt_R Control_L Control_R Shift_L Shift_R Super_L Super_R >>"$LOG" 2>&1 || true
+    # Release our button on the game window. Covers a press interrupted mid-hold
+    # and anything a previous run left down. Buttons 1/2/3 for good measure.
+    release_buttons() {
+        local b
+        for b in 1 2 3; do xdotool mouseup --window "$wid" "$b" >>"$LOG" 2>&1 || true; done
     }
 
+    # Optional: tell the game window "modifiers are up" right before a click, so a
+    # key you physically hold (Alt for push-to-talk, etc.) that also reaches the
+    # game doesn't modify the click. Window-targeted, so it never touches the
+    # modifier state of whatever you're really using on another window.
+    clear_mods() {
+        [ "${CLEARMODS:-0}" = 1 ] || return 0
+        xdotool keyup --window "$wid" Alt_L Alt_R Control_L Control_R Shift_L Shift_R Super_L Super_R \
+            >>"$LOG" 2>&1 || true
+    }
+
+    window_alive() { xdotool getwindowname "$wid" >/dev/null 2>&1; }
+
+    # Try to re-find the game window (it changes id when the game switches between
+    # windowed and fullscreen, or menu and world). Returns 0 and updates $wid.
+    relocate() {
+        local found
+        found="$(find_window_on "$disp")" || true
+        [ -n "$found" ] || return 1
+        [ "$found" = "$wid" ] || log "window id changed $wid -> $found"
+        wid="$found"
+        return 0
+    }
+
+    # xdotool exits non-zero when the target window is gone (BadWindow). That is
+    # the only failure worth reacting to, and checking the return of the click
+    # itself means no extra X round-trips per tick (which contend with an
+    # XWayland client that has focus).
+    poke() {  # poke <click|down|up>
+        local rc
+        case "$1" in
+            click) xdotool click     --window "$wid" "$BUTTON" >>"$LOG" 2>&1 ;;
+            down)  xdotool mousedown  --window "$wid" "$BUTTON" >>"$LOG" 2>&1 ;;
+            up)    xdotool mouseup    --window "$wid" "$BUTTON" >>"$LOG" 2>&1 ;;
+        esac
+        rc=$?
+        [ "$rc" -eq 0 ] && { fails=0; return 0; }
+        fails=$((fails + 1))
+        return 1
+    }
+
+    local cleaned=0
     cleanup() {
         local rc=$?
+        [ "$cleaned" = 1 ] && exit 0
+        cleaned=1
         release_buttons
-        log "released mouse buttons"
+        log "released buttons on $wid"
         rm -f "$PIDFILE"
         log "worker exit (rc=$rc, ticks=$tick)"
         note "stopped"
@@ -128,51 +190,49 @@ run() {
     }
     trap cleanup INT TERM EXIT
 
-    log "probe: $(xdotool getdisplaygeometry 2>&1) | mouse $(xdotool getmouselocation 2>&1)"
-    log "windows: $(xdotool search --maxdepth 5 --name '.' getwindowname %@ 2>&1 | tr '\n' '|')"
+    log "window: name='$(xdotool getwindowname "$wid" 2>&1)' geom='$(xdotool getwindowgeometry "$wid" 2>&1 | tr '\n' ' ')'"
 
-    if ! xdotool getdisplaygeometry >/dev/null 2>>"$LOG"; then
-        log "FATAL: cannot query display $d"
-        note "can't reach gamescope display $d (foxclick log)"
-        exit 1
-    fi
+    window_alive || { log "FATAL: game window $wid not found on $disp"; note "game window not found (foxclick log)"; exit 1; }
 
-    release_buttons   # start from a clean slate
-
-    [ -n "$WARP" ] && { xdotool mousemove --sync $WARP >>"$LOG" 2>&1; log "warp -> $WARP"; }
+    release_buttons   # clean slate
 
     if [ "$MODE" = hold ]; then
-        clear_kbd_mods
-        if xdotool mousedown "$BUTTON" >>"$LOG" 2>&1; then held=1; fi
-        log "mousedown button $BUTTON  (held=$held)"
+        clear_mods
+        poke down && held=1
+        log "mousedown --window $wid button $BUTTON  (held=$held)"
     fi
 
     while :; do
         tick=$((tick + 1))
-
-        if ! xdotool getdisplaygeometry >/dev/null 2>>"$LOG"; then
-            fails=$((fails + 1))
-            log "display unreachable ($fails/15) at tick $tick"
-            [ "$fails" -ge 15 ] && { log "giving up: display gone"; break; }
-            sleep 0.5; continue
-        fi
-        fails=0
 
         if [ "${MAX_SECONDS:-0}" -gt 0 ] 2>/dev/null; then
             [ "$(( $(date +%s) - start ))" -ge "$MAX_SECONDS" ] && { log "MAX_SECONDS reached"; break; }
         fi
 
         if [ "$MODE" = click ]; then
-            [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
-            clear_kbd_mods
-            xdotool click "$BUTTON" >>"$LOG" 2>&1 || log "click failed at tick $tick"
+            clear_mods
+            poke click || log "click failed ($fails) at tick $tick"
             sleep "$(interval)"
         else
-            [ -n "$WARP" ] && xdotool mousemove --sync $WARP >>"$LOG" 2>&1
             if [ "${REASSERT:-1}" = 1 ] && [ "$held" = 1 ]; then
-                xdotool mousedown "$BUTTON" >>"$LOG" 2>&1 || log "re-assert mousedown failed at tick $tick"
+                poke down || log "re-assert failed ($fails) at tick $tick"
             fi
             sleep 1
+        fi
+
+        # Only when clicks actually start failing (window gone) do we spend X
+        # round-trips trying to re-find it, then give up.
+        if [ "$fails" -ge 5 ]; then
+            if relocate; then
+                fails=0
+                log "recovered: now on window $wid"
+                [ "$MODE" = hold ] && { clear_mods; poke down && held=1; }
+            elif [ "$fails" -ge 20 ]; then
+                log "giving up: game window gone ($fails consecutive failures)"
+                break
+            else
+                sleep 0.4
+            fi
         fi
     done
     cleanup
@@ -181,14 +241,14 @@ run() {
 start() {
     is_running && { note "already running"; return 0; }
     command -v xdotool >/dev/null 2>&1 || die "xdotool not installed  ->  sudo pacman -S xdotool"
-    pgrep -x gamescope >/dev/null 2>&1 || note "warning: no gamescope process found"
-    local d gamepid
-    d="$(detect_display)" || die "no gamescope display found - is the game running under gamescope?"
-    gamepid="$(pgrep -x gamescope | head -n1 || true)"
-    setsid -f "$SELF" __run "$d" "${gamepid:-}" </dev/null >/dev/null 2>&1
+    local disp wid rest
+    rest="$(find_game)" || die "game window not found - is $WINDOW_CLASS running as a normal window? (not gamescope)"
+    disp="${rest%% *}"
+    wid="${rest##* }"
+    setsid -f "$SELF" __run "$disp" "$wid" </dev/null >/dev/null 2>&1
     sleep 0.4
     if is_running; then
-        note "ON - $MODE on display $d${WARP:+ @ $WARP}"
+        note "ON - $MODE, button $BUTTON, window $wid on $disp"
     else
         note "failed to start - run: foxclick log"
         exit 1
@@ -196,7 +256,7 @@ start() {
 }
 
 stop() {
-    local d p
+    local p
     if is_running; then
         p="$(cat "$PIDFILE")"
         kill "$p" 2>/dev/null
@@ -206,12 +266,13 @@ stop() {
         note "not running"
     fi
     rm -f "$PIDFILE"
-    # belt & suspenders: release every button on the nested display in case a
-    # click was interrupted mid-press (fixes the game losing right-click).
-    d="$(detect_display 2>/dev/null || true)"
-    if [ -n "$d" ]; then
-        local b
-        for b in 1 2 3; do DISPLAY="$d" xdotool mouseup "$b" >/dev/null 2>&1 || true; done
+    # belt & suspenders: release every button on the game window in case a press
+    # was interrupted mid-hold (otherwise the game thinks the button is stuck).
+    local rest disp wid b
+    rest="$(find_game 2>/dev/null || true)"
+    if [ -n "$rest" ]; then
+        disp="${rest%% *}"; wid="${rest##* }"
+        for b in 1 2 3; do DISPLAY="$disp" xdotool mouseup --window "$wid" "$b" >/dev/null 2>&1 || true; done
     fi
 }
 
@@ -226,23 +287,20 @@ status() {
 
 calibrate() {
     command -v xdotool >/dev/null 2>&1 || die "xdotool not installed  ->  sudo pacman -S xdotool"
-    echo "main display        : ${DISPLAY:-:0}"
-    echo "other X displays    : $(other_displays | tr '\n' ' ')"
-    local d
-    while read -r d; do
-        [ -n "$d" ] || continue
-        echo
-        echo "display $d"
-        echo "  geometry : $(DISPLAY="$d" xdotool getdisplaygeometry 2>&1)"
-        echo "  pointer  : $(DISPLAY="$d" xdotool getmouselocation 2>&1)"
-        echo "  windows  : $(DISPLAY="$d" xdotool search --maxdepth 5 --name '.' getwindowname %@ 2>&1 | tr '\n' '|')"
-    done < <(other_displays)
+    echo "config             : class='$WINDOW_CLASS' name='${WINDOW_NAME:-any}' button=$BUTTON mode=$MODE"
+    echo "candidate displays : $(candidate_displays | tr '\n' ' ')"
+    local rest disp wid
+    rest="$(find_game)" || die "game window not found - is $WINDOW_CLASS running as a normal window? (not gamescope)"
+    disp="${rest%% *}"; wid="${rest##* }"
     echo
-    d="$(detect_display)" || die "no gamescope display found - is the game running under gamescope?"
-    echo "==> chosen display : $d"
-    echo "firing 5 test clicks at the current nested pointer position in 2s..."
+    echo "chosen display     : $disp"
+    echo "game window        : $wid  name='$(DISPLAY="$disp" xdotool getwindowname "$wid" 2>&1)'"
+    echo "geometry           : $(DISPLAY="$disp" xdotool getwindowgeometry "$wid" 2>&1 | tr '\n' ' ')"
+    echo
+    echo "firing 5 test ${BUTTON}-clicks at that window in 2s (focus stays where it is)..."
     sleep 2
-    for _ in 1 2 3 4 5; do DISPLAY="$d" xdotool click "$BUTTON"; sleep 0.4; done
+    local i
+    for i in 1 2 3 4 5; do DISPLAY="$disp" xdotool click --window "$wid" "$BUTTON"; sleep 0.4; done
     echo "done - did the game register all 5?"
 }
 
@@ -255,7 +313,7 @@ case "${1:-toggle}" in
     log)        [ -f "$LOG" ] && cat "$LOG" || echo "no log yet ($LOG)" ;;
     __run)      shift; run "${1:-}" "${2:-}" ;;
     -h|--help|help)
-        sed -n '2,18p' "$SELF" | sed 's/^# \{0,1\}//' ;;
+        sed -n '2,21p' "$SELF" | sed 's/^# \{0,1\}//' ;;
     *)
         echo "usage: foxclick [toggle|start|stop|status|calibrate|log]" >&2
         exit 2 ;;

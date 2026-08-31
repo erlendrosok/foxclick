@@ -1,9 +1,9 @@
 # foxclick configuration - shell syntax, sourced by ~/.local/bin/foxclick
 # Edit, then just toggle again (no daemon to restart).
 
-# click = repeated click events  (this is what xclicker did - a good default)
-# hold  = press and hold the button down
-MODE=click
+# hold  = press and hold the button down  (building, digging in Foxhole)
+# click = repeated click events
+MODE=hold
 
 # click mode:
 CPS=12            # clicks per second
@@ -11,25 +11,25 @@ JITTER=15         # +/- percent random variation on the interval (0 = perfectly 
 
 BUTTON=1          # 1=left  2=middle  3=right
 
-# hold mode only: re-send the press every second so gamescope doesn't drop the
-# held-button state. Set 0 for a single clean press.
+# hold mode: re-send the press every tick so a dropped press recovers.
+# Set 0 for a single clean press.
 REASSERT=1
 
-# Release a held keyboard modifier (Alt/Ctrl/Shift/Super) before each click.
-# If a modifier leaks into the game (e.g. Alt used for Discord push-to-talk
-# while the game is focused) every click would otherwise become Alt+click and
-# do nothing. Only touches keyboard keys, never mouse buttons. Set 0 to disable.
-CLEARMODS=1
+# Which window to click. foxclick sends events straight to this one window by id
+# (via xdotool --window), so they never touch any other window - Discord, the
+# browser, Steam are all safe - and they don't follow or steal your focus.
+WINDOW_CLASS="steam_app_505460"   # X window class (Foxhole = its Steam appid)
+WINDOW_NAME=""                    # optional extra filter on the window name (regex)
 
-# Cursor handling:
-#   empty  -> act wherever the nested cursor is when you hit the hotkey
-#             (hover the spot in-game, then trigger, then tab away)
-#   "X Y"  -> re-position the nested cursor to this pixel every tick, e.g. WARP="1280 720"
-#             use `foxclick calibrate` to read out coordinates
-WARP=""
+# Force the X display, e.g. ":0". Empty = autodetect (your session's DISPLAY,
+# then any X socket) and find the window on it.
+X_DISPLAY=""
 
-# Force the gamescope X display instead of autodetecting, e.g. GS_DISPLAY=":1"
-GS_DISPLAY=""
+# Only enable if a modifier key you physically hold (Alt for push-to-talk, etc.)
+# that also reaches the game is turning your clicks into modified clicks in-game.
+# Sends a modifier-release to the game window only - never affects the modifier
+# state of whatever you're really using on another window.
+CLEARMODS=0
 
 # Safety: auto-stop after this many seconds (0 = run until you stop it or the game closes)
 MAX_SECONDS=0
